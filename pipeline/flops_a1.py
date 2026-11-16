@@ -14,7 +14,7 @@ Pure stdlib — run: python3 flops_a1.py
 D, L, NH, T, V = 768, 12, 12, 2048, 50000
 I0 = 3072
 FULL_LAYERS = [4, 8, 12]           # 1-indexed positions of full attention
-GDN_H, GDN_DK, GDN_DV, GDN_C = 6, 128, 128, 64
+GDN_H, GDN_DK, GDN_DV, GDN_C = 6, 96, 192, 64   # fla-canonical: key_dim=0.75d, expand_v=2
 
 
 def full_layer_macs(i):
@@ -22,7 +22,7 @@ def full_layer_macs(i):
 
 
 def gdn_layer_macs(i):
-    qk, v = GDN_H * GDN_DK, GDN_H * GDN_DV
+    qk, v = GDN_H * GDN_DK, GDN_H * GDN_DV      # 0.75d, 1.5d (fla 6d^2 allocation)
     proj = D * qk + D * qk + D * v + D * v + v * D + 2 * D * GDN_H
     conv = 4 * (2 * qk + v)
     intra = GDN_C * (GDN_DK + GDN_DV) * GDN_H * 2   # A-matmul + o-matmul, x2 matmuls
@@ -42,7 +42,7 @@ def params(i, gdn: bool):
     emb = D * V
     full = 4 * D * D + 3 * D * i
     qk, v = GDN_H * GDN_DK, GDN_H * GDN_DV
-    gdn_l = D * qk * 2 + D * v + D * v + v * D + 2 * D * GDN_H + 4 * (2 * qk + v) + 3 * D * i
+    gdn_l = D * qk * 2 + D * v * 2 + v * D + 2 * D * GDN_H + 4 * (2 * qk + v) + 3 * D * i + v + 2 * GDN_H
     if gdn:
         return emb + 3 * full + 9 * gdn_l
     return emb + L * full
