@@ -1,0 +1,45 @@
+# A1 hybrid GDN 3:1 — КОНФИГ (предварительный; MLP width перемораживается
+# после profiler-кросс-чека на калибровке, см. PREREG 344-55 / A1-DESIGN §4)
+# FLOPs: -0.020% vs A0 (flops_a1.py); params 170.18M (+12.2%), диапазон предрега 159-173M.
+n_layer: 12
+n_embd: 768
+n_head: 12
+intermediate_size: 3352
+vocab_size: 50000
+tie_embeddings: true
+rope_theta: 10000.0
+context_length: 2048
+
+full_attn_layers: [4, 8, 12]   # 1-indexed; остальные 9 — GDN
+gdn:
+  n_heads: 6
+  expand_v: 2.0                # head_k=96, head_v=192 (fla 6d^2 allocation)
+  conv_kernel: 4
+  chunk_size: 64
+  mode: chunked                # chunked | recurrent (эталон для тестов)
+
+training:
+  learning_rate: 0.0006
+  beta1: 0.9
+  beta2: 0.95
+  weight_decay: 0.1            # A_log/dt_bias автоматически исключены (wd=0)
+  grad_clip: 1.0
+  warmup_steps: 2000
+  micro_batch: 6
+  max_steps: 38147
+
+regularization:                # идентичен C0 (regularization-alignment fuse)
+  input_token_dropout: 0.1
+  mlp_dropout: 0.1
+
+logging:
+  val_every: 500
+  save_every: 1000
+
+data:
+  seq_len: 2048
+  batch_size: 32
+  budget_tokens: 2500000000
+  val_seqs: 256
+
+ckpt_dir: /mnt/data2/c0_corpus/ckpt_a1

@@ -40,12 +40,13 @@ def a1_macs(i):
 
 def params(i, gdn: bool):
     emb = D * V
+    norms = 2 * D * L + D                      # attn_norm + ffn_norm per block + final_norm
     full = 4 * D * D + 3 * D * i
     qk, v = GDN_H * GDN_DK, GDN_H * GDN_DV
-    gdn_l = D * qk * 2 + D * v * 2 + v * D + 2 * D * GDN_H + 4 * (2 * qk + v) + 3 * D * i + v + 2 * GDN_H
+    gdn_l = D * qk * 2 + D * v * 2 + v * D + 2 * D * GDN_H + 4 * (2 * qk + v) + 3 * D * i + GDN_DV + 2 * GDN_H
     if gdn:
-        return emb + 3 * full + 9 * gdn_l
-    return emb + L * full
+        return emb + norms + 3 * full + 9 * gdn_l
+    return emb + norms + L * full
 
 
 A0 = a0_macs()
