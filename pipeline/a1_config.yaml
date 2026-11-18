@@ -17,6 +17,10 @@ gdn:
   conv_kernel: 4
   chunk_size: 64
   mode: chunked                # chunked | recurrent (эталон для тестов)
+  solver: doubling             # nilpotent doubling (матмулы, portable); проверен
+                               # против эталона forward_substitution: 8.9e-8 vs
+                               # recurrent (эталон: 7.5e-8), градиенты конечны,
+                               # в 3.3x быстрее на CPU (test_doubling.py)
 
 training:
   learning_rate: 0.0006

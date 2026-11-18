@@ -41,6 +41,21 @@ def forward_substitution(L, r):
     return torch.stack(xs, dim=-2)
 
 
+def doubling_solve(L, r):
+    """Solve (I+L) x = r for strictly-lower L via nilpotent doubling:
+    (I+L)^-1 = (I-L)(I+L^2)(I+L^4)...(I+L^{2^k}), L^{2^k}=0 for C<=2^k.
+    Matmul-only (no sequential loop, no atomics) -> portable (AMD/ROCm) and
+    parallel; mathematically identical to forward_substitution."""
+    C = L.shape[-1]
+    x = r - L @ r
+    p = 2
+    while p < C:
+        L = L @ L                      # L^p -> L^{2p}
+        x = x + L @ x
+        p *= 2
+    return x
+
+
 def naive_recurrent(q, k, v, beta, g, scale=None):
     """q,k: (B,h,T,dk); v: (B,h,T,dv); beta,g: (B,h,T). fp32 internally."""
     q, k, v, beta, g = [t.float() for t in (q, k, v, beta, g)]
@@ -59,7 +74,7 @@ def naive_recurrent(q, k, v, beta, g, scale=None):
     return torch.stack(outs, dim=2)
 
 
-def chunked(q, k, v, beta, g, chunk_size: int = 64, scale=None):
+def chunked(q, k, v, beta, g, chunk_size: int = 64, scale=None, solver="substitution"):
     """Chunked gated delta rule (training path). Same signature as naive_recurrent.
 
     Within a chunk (cumulative log-decay G_t <= 0 from chunk start):
@@ -89,7 +104,7 @@ def chunked(q, k, v, beta, g, chunk_size: int = 64, scale=None):
         A = (bc.unsqueeze(-1) * kk * D).masked_fill(~tril_strict, 0.0)
         pred = torch.einsum("bhtk,bhkv->bhtv", kc * G.exp().unsqueeze(-1), S)
         r = bc.unsqueeze(-1) * (vc - pred)
-        u = forward_substitution(A, r)
+        u = forward_substitution(A, r) if solver == "substitution" else doubling_solve(A, r)
         o_inter = torch.einsum("bhtk,bhkv->bhtv", qc * G.exp().unsqueeze(-1), S)
         tril = torch.tril(torch.ones(C, C, dtype=torch.bool, device=q.device))
         qk = (torch.einsum("bhtk,bhsk->bhts", qc, kc) * D).masked_fill(~tril, 0.0)
@@ -105,10 +120,11 @@ class GatedDeltaNet(nn.Module):
     recommended: key_dim = 3/4 d, value_dim = 3/2 d."""
 
     def __init__(self, d_model: int, n_heads: int = 6, expand_v: float = 2.0,
-                 conv_kernel: int = 4, chunk_size: int = 64, mode: str = "chunked"):
+                 conv_kernel: int = 4, chunk_size: int = 64, mode: str = "chunked",
+                 solver: str = "substitution"):
         super().__init__()
         assert mode in ("chunked", "recurrent")
-        self.mode, self.chunk_size = mode, chunk_size
+        self.mode, self.chunk_size, self.solver = mode, chunk_size, solver
         self.h = n_heads
         self.dk = int(0.75 * d_model / n_heads)          # key_dim = 0.75d total
         self.dv = int(self.dk * expand_v)               # value_dim = 1.5d total
@@ -144,7 +160,8 @@ class GatedDeltaNet(nn.Module):
         g = -self.A_log.exp()[None, :, None] * F.softplus(self.a_proj(x) + self.dt_bias).transpose(1, 2)
         beta = self.b_proj(x).sigmoid().transpose(1, 2)
         scan = chunked if self.mode == "chunked" else naive_recurrent
-        o = scan(q, k, v, beta, g)                          # (B,h,T,dv) fp32
+        o = scan(q, k, v, beta, g) if self.mode != "chunked" else \
+            scan(q, k, v, beta, g, chunk_size=self.chunk_size, solver=self.solver)
         gate = F.silu(self.g_proj(x).view(B, T, self.h, self.dv).transpose(1, 2))
         o = o * torch.rsqrt(o.pow(2).mean(-1, keepdim=True) + 1e-5) * self.o_norm_weight * gate
         o = o.transpose(1, 2).reshape(B, T, self.value_dim)
